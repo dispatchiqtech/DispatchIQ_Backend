@@ -9,3 +9,13 @@ class SignupResponse(BaseModel):
     email: EmailStr
     confirmed: bool
     message: str
+
+class SigninRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class SigninResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    user_id: str
+    email: str
