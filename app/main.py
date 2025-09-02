@@ -19,12 +19,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Health Check
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "supabase_connected": supabase is not None}
 
-# ✅ Mount Routes
 app.include_router(routes_auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(routes_users.router, prefix="/api/v1/users", tags=["Users"])
 app.include_router(routes_onboarding.router, prefix="/api/v1/onboarding", tags=["Onboarding"])
