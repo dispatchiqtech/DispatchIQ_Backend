@@ -30,3 +30,14 @@ class TokenRefreshResponse(BaseModel):
 
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
+
+class GoogleSigninRequest(BaseModel):
+    id_token: str
+
+class GoogleSigninResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    user_id: str
+    email: str
+    email_confirmed: bool
+    is_new_user: bool

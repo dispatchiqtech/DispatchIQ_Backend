@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
 from app.models.auth import (
     SignupRequest, SignupResponse, SigninRequest, SigninResponse,
-    TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest
+    TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest,
+    GoogleSigninRequest, GoogleSigninResponse
 )
 from app.services.auth_service import (
     signup_user, signin_user, refresh_access_token, verify_email,
-    resend_verification_email
+    resend_verification_email, signin_with_google
 )
 from app.api.deps import limiter
 from app.core.config import settings
@@ -99,3 +100,66 @@ async def resend_verification(request: Request, resend_data: ResendVerificationR
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to send verification email: {str(e)}")
+
+@router.post("/google-signin", response_model=GoogleSigninResponse)
+@limiter.limit("10/minute")
+async def google_signin(request: Request, google_data: GoogleSigninRequest):
+    """
+    Sign in with Google OAuth. Creates account if doesn't exist.
+    
+    ## Frontend Integration:
+    
+    ### 1. Install Google Sign-In Library:
+    ```html
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    ```
+    
+    ### 2. Initialize Google Sign-In:
+    ```javascript
+    function handleCredentialResponse(response) {
+        // response.credential contains the ID token
+        fetch('/api/v1/auth/google-signin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_token: response.credential })
+        })
+        .then(res => res.json())
+        .then(data => {
+            // Store tokens and redirect user
+            localStorage.setItem('access_token', data.access_token);
+            localStorage.setItem('refresh_token', data.refresh_token);
+            // Handle is_new_user flag for onboarding flow
+            if (data.is_new_user) {
+                window.location.href = '/onboarding';
+            } else {
+                window.location.href = '/dashboard';
+            }
+        });
+    }
+    ```
+    
+    ### 3. HTML Button:
+    ```html
+    <div id="g_id_onload"
+         data-client_id="YOUR_GOOGLE_CLIENT_ID"
+         data-callback="handleCredentialResponse">
+    </div>
+    <div class="g_id_signin" data-type="standard"></div>
+    ```
+    
+    ### 4. Google Cloud Console Setup:
+    - Add your domain to "Authorized JavaScript origins"
+    - Use Client ID: CLIENT ID
+    
+    ## Response:
+    - `is_new_user`: true if account was just created, false if existing user
+    - `email_confirmed`: always true for Google users (pre-verified)
+    - Same token structure as regular signin for consistent auth flow
+    """
+    try:
+        result = signin_with_google(google_data.id_token)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Google signin failed: {str(e)}")

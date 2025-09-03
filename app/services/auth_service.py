@@ -4,6 +4,9 @@ from app.core.security import create_access_token, create_refresh_token, verify_
 from fastapi import HTTPException, status
 from typing import Dict, Any
 import re
+import requests
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
@@ -219,5 +222,129 @@ def resend_verification_email(email: str) -> bool:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to resend verification email: {str(e)}"
+        )
+
+def signin_with_google(google_id_token: str) -> Dict[str, Any]:
+    """Sign in user with Google OAuth and create account if doesn't exist."""
+    try:
+        # Verify Google ID token
+        try:
+            # Verify the token with Google
+            idinfo = id_token.verify_oauth2_token(
+                google_id_token, 
+                google_requests.Request()
+            )
+            
+            # Verify the issuer
+            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+                raise ValueError('Wrong issuer.')
+                
+            google_user_id = idinfo['sub']
+            email = idinfo['email']
+            email_verified = idinfo.get('email_verified', False)
+            
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid Google token: {str(e)}"
+            )
+        
+        # Try to sign in with Supabase using Google OAuth
+        try:
+            response = supabase.auth.sign_in_with_id_token({
+                "provider": "google",
+                "token": google_id_token
+            })
+            
+            if response.user and response.session:
+                # User exists, sign them in
+                access_token = create_access_token(data={"sub": response.user.id, "email": response.user.email})
+                refresh_token = create_refresh_token(data={"sub": response.user.id})
+                
+                return {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "user_id": response.user.id,
+                    "email": response.user.email,
+                    "email_confirmed": response.user.email_confirmed_at is not None,
+                    "is_new_user": False
+                }
+                
+        except Exception as supabase_error:
+            # If Supabase signin fails, try to create the user
+            try:
+                # Check if user already exists by email
+                existing_users = supabase.auth.admin.list_users()
+                user_exists = any(user.email == email for user in existing_users.users if user.email)
+                
+                if user_exists:
+                    # User exists but Google signin failed, try regular Google OAuth flow
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="User exists but Google authentication failed. Please try again or use email/password signin."
+                    )
+                
+                # Create new user with Google OAuth
+                signup_response = supabase.auth.sign_up({
+                    "email": email,
+                    "password": f"google_oauth_{google_user_id}_{email}",  # Temporary password
+                    "options": {
+                        "data": {
+                            "provider": "google",
+                            "google_id": google_user_id,
+                            "email_verified": email_verified
+                        }
+                    }
+                })
+                
+                if not signup_response.user:
+                    raise Exception("Failed to create user account")
+                
+                # If user was created successfully, try to sign them in again
+                try:
+                    signin_response = supabase.auth.sign_in_with_id_token({
+                        "provider": "google",
+                        "token": google_id_token
+                    })
+                    
+                    if signin_response.user and signin_response.session:
+                        access_token = create_access_token(data={"sub": signin_response.user.id, "email": signin_response.user.email})
+                        refresh_token = create_refresh_token(data={"sub": signin_response.user.id})
+                        
+                        return {
+                            "access_token": access_token,
+                            "refresh_token": refresh_token,
+                            "user_id": signin_response.user.id,
+                            "email": signin_response.user.email,
+                            "email_confirmed": True,  # Google emails are pre-verified
+                            "is_new_user": True
+                        }
+                    
+                except Exception:
+                    # Fallback: return the created user info
+                    access_token = create_access_token(data={"sub": signup_response.user.id, "email": signup_response.user.email})
+                    refresh_token = create_refresh_token(data={"sub": signup_response.user.id})
+                    
+                    return {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "user_id": signup_response.user.id,
+                        "email": signup_response.user.email,
+                        "email_confirmed": True,  # Google emails are pre-verified
+                        "is_new_user": True
+                    }
+                    
+            except Exception as create_error:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to create or authenticate Google user: {str(create_error)}"
+                )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Google authentication failed: {str(e)}"
         )
 
