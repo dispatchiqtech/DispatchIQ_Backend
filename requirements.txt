@@ -5,3 +5,7 @@ pydantic-settings
 supabase
 pytest
 httpx
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+slowapi

@@ -1,75 +1,101 @@
 from fastapi import APIRouter, HTTPException, Request
-from app.models.auth import SignupRequest, SignupResponse, SigninRequest, SigninResponse
-from app.services.auth_service import signup_user
-from fastapi.responses import RedirectResponse, JSONResponse
-from app.db.supabase_client import supabase
+from app.models.auth import (
+    SignupRequest, SignupResponse, SigninRequest, SigninResponse,
+    TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest
+)
+from app.services.auth_service import (
+    signup_user, signin_user, refresh_access_token, verify_email,
+    resend_verification_email
+)
+from app.api.deps import limiter
+from app.core.config import settings
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
 @router.post("/signup", response_model=SignupResponse)
-async def signup(request: SignupRequest):
+@limiter.limit("5/minute")
+async def signup(request: Request, signup_data: SignupRequest):
+    """Register a new user with email verification."""
     try:
-        user = signup_user(request.email, request.password)
+        user = signup_user(signup_data.email, signup_data.password)
 
         return {
             "id": user.id,
             "email": user.email,
-            "confirmed": user.confirmed_at is not None,
-            "message": "Signup successful. Please confirm your email if required."
+            "confirmed": user.email_confirmed_at is not None,
+            "message": "Signup successful. Please check your email to verify your account."
         }
 
-    except ValueError as ve:  # validation issue
+    except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
-    except Exception as e:  # supabase or unknown issue
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-# @router.get("/login/google")
-# def login_google():
-#     redirect_url = supabase.auth.sign_in_with_oauth(
-#         {"provider": "google"},
-#         options={"redirect_to": "https://oqiqruvfrplnhyxkbemv.supabase.co/auth/v1/callback"}
-#     )
-#     return RedirectResponse(redirect_url.url)
-
-
-# # Step 2: Handle the callback
-# @router.get("/callback")
-# def auth_callback(request: Request):
-#     # Supabase will send the `access_token` & `refresh_token` in query params
-#     token = request.query_params.get("access_token")
-#     refresh_token = request.query_params.get("refresh_token")
-
-#     if not token:
-#         return JSONResponse({"error": "OAuth login failed"}, status_code=400)
-
-#     # Optional: fetch user info
-#     user = supabase.auth.get_user(token)
-
-#     return JSONResponse({
-#         "message": "Google login successful",
-#         "user": user.user if user else None,
-#         "access_token": token,
-#         "refresh_token": refresh_token
-#     })
-
 
 @router.post("/signin", response_model=SigninResponse)
-def signin_user(request: SigninRequest):
+@limiter.limit("10/minute")
+async def signin(request: Request, signin_data: SigninRequest):
+    """Sign in user and return JWT tokens."""
     try:
-        response = supabase.auth.sign_in_with_password({
-            "email": request.email,
-            "password": request.password
-        })
-
-        if not response.user:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-
-        return {
-            "access_token": response.session.access_token,
-            "refresh_token": response.session.refresh_token,
-            "user_id": response.user.id,
-            "email": response.user.email
-        }
-
+        result = signin_user(signin_data.email, signin_data.password)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error during signin: {str(e)}")
+
+@router.post("/refresh", response_model=TokenRefreshResponse)
+@limiter.limit("20/minute")
+async def refresh_token(request: Request, refresh_data: TokenRefreshRequest):
+    """Refresh access token using refresh token."""
+    try:
+        result = refresh_access_token(refresh_data.refresh_token)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Could not refresh token")
+
+@router.get("/verify")
+@limiter.limit("10/minute")
+async def verify_email_from_link(request: Request, token: str, type: str = "signup", redirect_to: str = None):
+    """Handle email verification from Supabase email links."""
+    try:
+        verify_email(token)
+        
+        # If redirect_to is provided, redirect to that URL
+        if redirect_to:
+            return JSONResponse(
+                status_code=302,
+                headers={"Location": redirect_to},
+                content={"message": "Email verified successfully", "redirect": redirect_to}
+            )
+        
+        # Default redirect to frontend
+        return JSONResponse(
+            status_code=200,
+            content={
+                "message": "Email verified successfully", 
+                "success": True,
+                "redirect": f"{settings.FRONTEND_URL}/auth/verified"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Email verification failed: {str(e)}")
+
+@router.post("/resend-verification")
+@limiter.limit("3/minute")
+async def resend_verification(request: Request, resend_data: ResendVerificationRequest):
+    """Resend email verification."""
+    try:
+        success = resend_verification_email(resend_data.email)
+        if success:
+            return {"message": "Verification email sent successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to send verification email")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to send verification email: {str(e)}")

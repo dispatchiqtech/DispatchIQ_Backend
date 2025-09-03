@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import routes_auth, routes_users, routes_onboarding
 from app.db.supabase_client import supabase
+from app.api.deps import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 # Initialize FastAPI
 app = FastAPI(
@@ -10,6 +13,10 @@ app = FastAPI(
     version="1.0.0",
     description="Backend API powered by FastAPI + Supabase"
 )
+
+# Add rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
