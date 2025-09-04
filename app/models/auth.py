@@ -31,6 +31,14 @@ class TokenRefreshResponse(BaseModel):
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
+class VerifyOtpRequest(BaseModel):
+    email: EmailStr
+    code: constr(pattern=r"^\d{6}$")
+
+class VerifyOtpResponse(BaseModel):
+    success: bool
+    message: str
+
 class GoogleSigninRequest(BaseModel):
     id_token: str
 

@@ -7,6 +7,7 @@ import re
 import requests
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+ 
 
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
@@ -34,6 +35,8 @@ def signup_user(email: str, password: str):
 
         if response.user is None:
             raise Exception(getattr(response, "error", "Unknown signup failure"))
+
+        # Supabase sends confirmation/OTP email automatically if enabled in dashboard
 
         return response.user
 
@@ -207,6 +210,33 @@ def verify_email(token: str) -> bool:
         detail="Email verification failed. Token may be expired or invalid."
     )
 
+def send_verification_otp(email: str) -> bool:
+    """Ask Supabase to send/resend the signup verification OTP/email."""
+    try:
+        supabase.auth.resend({
+            "type": "signup",
+            "email": email,
+        })
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to send verification code: {str(e)}")
+
+def verify_email_with_otp(email: str, code: str) -> bool:
+    """Verify email using Supabase-managed OTP for signup confirmation."""
+    try:
+        response = supabase.auth.verify_otp({
+            "type": "signup",
+            "email": email,
+            "token": code,
+        })
+        if getattr(response, "user", None):
+            return True
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email verification failed: {str(e)}")
+
 def resend_verification_email(email: str) -> bool:
     """Resend verification email."""
     try:
@@ -347,4 +377,5 @@ def signin_with_google(google_id_token: str) -> Dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Google authentication failed: {str(e)}"
         )
+
 

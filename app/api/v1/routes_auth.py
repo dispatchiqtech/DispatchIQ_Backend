@@ -2,11 +2,11 @@ from fastapi import APIRouter, HTTPException, Request
 from app.models.auth import (
     SignupRequest, SignupResponse, SigninRequest, SigninResponse,
     TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest,
-    GoogleSigninRequest, GoogleSigninResponse
+    GoogleSigninRequest, GoogleSigninResponse, VerifyOtpRequest, VerifyOtpResponse
 )
 from app.services.auth_service import (
     signup_user, signin_user, refresh_access_token, verify_email,
-    resend_verification_email, signin_with_google
+    resend_verification_email, signin_with_google, send_verification_otp, verify_email_with_otp
 )
 from app.api.deps import limiter
 from app.core.config import settings
@@ -25,7 +25,7 @@ async def signup(request: Request, signup_data: SignupRequest):
             "id": user.id,
             "email": user.email,
             "confirmed": user.email_confirmed_at is not None,
-            "message": "Signup successful. Please check your email to verify your account."
+            "message": "Signup successful. We sent a 6-digit code to your email to verify your account."
         }
 
     except ValueError as ve:
@@ -57,30 +57,13 @@ async def refresh_token(request: Request, refresh_data: TokenRefreshRequest):
     except Exception as e:
         raise HTTPException(status_code=401, detail="Could not refresh token")
 
-@router.get("/verify")
+@router.post("/verify-otp", response_model=VerifyOtpResponse)
 @limiter.limit("10/minute")
-async def verify_email_from_link(request: Request, token: str, type: str = "signup", redirect_to: str = None):
-    """Handle email verification from Supabase email links."""
+async def verify_email_with_code(request: Request, data: VerifyOtpRequest):
+    """Verify user email using a 6-digit OTP sent by email."""
     try:
-        verify_email(token)
-        
-        # If redirect_to is provided, redirect to that URL
-        if redirect_to:
-            return JSONResponse(
-                status_code=302,
-                headers={"Location": redirect_to},
-                content={"message": "Email verified successfully", "redirect": redirect_to}
-            )
-        
-        # Default redirect to frontend
-        return JSONResponse(
-            status_code=200,
-            content={
-                "message": "Email verified successfully", 
-                "success": True,
-                "redirect": f"{settings.FRONTEND_URL}/auth/verified"
-            }
-        )
+        ok = verify_email_with_otp(data.email, data.code)
+        return {"success": True, "message": "Email verified successfully"}
     except HTTPException:
         raise
     except Exception as e:
@@ -89,17 +72,17 @@ async def verify_email_from_link(request: Request, token: str, type: str = "sign
 @router.post("/resend-verification")
 @limiter.limit("3/minute")
 async def resend_verification(request: Request, resend_data: ResendVerificationRequest):
-    """Resend email verification."""
+    """Send or resend a verification OTP to the user's email."""
     try:
-        success = resend_verification_email(resend_data.email)
+        success = send_verification_otp(resend_data.email)
         if success:
-            return {"message": "Verification email sent successfully"}
+            return {"message": "Verification code sent successfully"}
         else:
-            raise HTTPException(status_code=400, detail="Failed to send verification email")
+            raise HTTPException(status_code=400, detail="Failed to send verification code")
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to send verification email: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to send verification code: {str(e)}")
 
 @router.post("/google-signin", response_model=GoogleSigninResponse)
 @limiter.limit("10/minute")

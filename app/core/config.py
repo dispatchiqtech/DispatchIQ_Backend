@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FRONTEND_URL: str = "http://localhost:3000"
+    # SMTP for sending OTP emails
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    # OTP settings
+    VERIFICATION_OTP_EXP_MINUTES: int = 10
 
     class Config:
         env_file = ".env"
