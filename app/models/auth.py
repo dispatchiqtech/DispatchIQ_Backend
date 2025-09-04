@@ -39,6 +39,18 @@ class VerifyOtpResponse(BaseModel):
     success: bool
     message: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordOtpRequest(BaseModel):
+    email: EmailStr
+    code: constr(pattern=r"^\d{6}$")
+    new_password: constr(min_length=8, max_length=64)
+
+class ResetPasswordResponse(BaseModel):
+    success: bool
+    message: str
+
 class GoogleSigninRequest(BaseModel):
     id_token: str
 

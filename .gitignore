@@ -32,7 +32,6 @@ pytest_cache/
 
 # Environment & secrets
 .env
-.env.*
 *.key
 *.pem
 

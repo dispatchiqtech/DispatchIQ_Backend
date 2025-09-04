@@ -2,11 +2,13 @@ from fastapi import APIRouter, HTTPException, Request
 from app.models.auth import (
     SignupRequest, SignupResponse, SigninRequest, SigninResponse,
     TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest,
-    GoogleSigninRequest, GoogleSigninResponse, VerifyOtpRequest, VerifyOtpResponse
+    GoogleSigninRequest, GoogleSigninResponse, VerifyOtpRequest, VerifyOtpResponse,
+    ForgotPasswordRequest, ResetPasswordOtpRequest, ResetPasswordResponse
 )
 from app.services.auth_service import (
-    signup_user, signin_user, refresh_access_token, verify_email,
-    resend_verification_email, signin_with_google, send_verification_otp, verify_email_with_otp
+    signup_user, signin_user, refresh_access_token,
+    signin_with_google, send_verification_otp, verify_email_with_otp,
+    request_password_reset, reset_password_with_otp
 )
 from app.api.deps import limiter
 from app.core.config import settings
@@ -83,6 +85,30 @@ async def resend_verification(request: Request, resend_data: ResendVerificationR
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to send verification code: {str(e)}")
+
+@router.post("/forgot-password")
+@limiter.limit("5/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest):
+    """Send a Supabase-managed recovery OTP/email to reset password."""
+    try:
+        request_password_reset(data.email)
+        return {"message": "If the email exists, a reset code has been sent."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to initiate password reset: {str(e)}")
+
+@router.post("/reset-password-otp", response_model=ResetPasswordResponse)
+@limiter.limit("5/minute")
+async def reset_password_with_code(request: Request, data: ResetPasswordOtpRequest):
+    """Verify recovery OTP and set a new password using Supabase."""
+    try:
+        reset_password_with_otp(data.email, data.code, data.new_password)
+        return {"success": True, "message": "Password has been reset successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Password reset failed: {str(e)}")
 
 @router.post("/google-signin", response_model=GoogleSigninResponse)
 @limiter.limit("10/minute")

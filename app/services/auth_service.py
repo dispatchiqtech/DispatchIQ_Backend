@@ -254,6 +254,41 @@ def resend_verification_email(email: str) -> bool:
             detail=f"Failed to resend verification email: {str(e)}"
         )
 
+def request_password_reset(email: str) -> bool:
+    """Trigger Supabase to send a password reset email/OTP (recovery)."""
+    try:
+        supabase.auth.reset_password_for_email(email, {
+            "redirect_to": f"{settings.FRONTEND_URL}/auth/reset-callback"
+        })
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to initiate password reset: {str(e)}")
+
+def reset_password_with_otp(email: str, code: str, new_password: str) -> bool:
+    """Verify recovery OTP and set a new password using Supabase Auth."""
+    # Validate strength using same policy
+    if not validate_password_strength(new_password):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Password does not meet strength requirements")
+    try:
+        # 1) Verify OTP of type 'recovery'. On success, Supabase creates a session in the client.
+        verify_resp = supabase.auth.verify_otp({
+            "type": "recovery",
+            "email": email,
+            "token": code,
+        })
+        if not getattr(verify_resp, "session", None) and not getattr(verify_resp, "user", None):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+
+        # 2) Update the password for the now-authenticated user.
+        supabase.auth.update_user({
+            "password": new_password
+        })
+        return True
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to reset password: {str(e)}")
+
 def signin_with_google(google_id_token: str) -> Dict[str, Any]:
     """Sign in user with Google OAuth and create account if doesn't exist."""
     try:
