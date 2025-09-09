@@ -3,6 +3,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.security import verify_token
 from app.db.supabase_client import supabase
+from app.core.config import settings
+from supabase import create_client
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -30,16 +32,19 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
                 detail="Invalid token payload"
             )
         
-        # Get user from Supabase using admin client
+        # Get user from Supabase using admin client (requires service role key)
         try:
-            response = supabase.auth.admin.get_user_by_id(user_id)
-            if not response.user:
+            admin_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY or settings.SUPABASE_KEY)
+            response = admin_client.auth.admin.get_user_by_id(user_id)
+            if not getattr(response, "user", None):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="User not found"
                 )
             return response.user
-        except Exception as e:
+        except HTTPException:
+            raise
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate user"
