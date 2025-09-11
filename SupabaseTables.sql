@@ -3,173 +3,172 @@
 
 CREATE TABLE public.app_users (
   user_id uuid NOT NULL,
-  type_id smallint,
-  onboarding_status text NOT NULL DEFAULT 'pending'::text CHECK (onboarding_status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text])),
+  primary_role USER-DEFINED NOT NULL,
+  onboarding_status text NOT NULL DEFAULT 'pending'::text,
+  approval_status USER-DEFINED NOT NULL DEFAULT 'pending'::approval_status,
+  is_active boolean NOT NULL DEFAULT true,
+  suspended_at timestamp with time zone,
   first_name text,
   last_name text,
-  phone text,
-  country text,
-  state text,
-  city text,
-  address text,
-  postal_code text,
+  CONSTRAINT app_users_pkey PRIMARY KEY (user_id),
+  CONSTRAINT app_users_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.compliance_documents (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  owner_type USER-DEFINED NOT NULL,
+  owner_id uuid NOT NULL,
+  doc_type text NOT NULL,
+  doc_number text,
+  issuer text,
+  issue_date date,
+  expiry_date date,
+  file_path text NOT NULL,
+  status USER-DEFINED NOT NULL DEFAULT 'pending'::approval_status,
+  reviewed_by_user_id uuid,
+  reviewed_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT app_users_pkey PRIMARY KEY (user_id),
-  CONSTRAINT app_users_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
-  CONSTRAINT app_users_type_id_fkey FOREIGN KEY (type_id) REFERENCES public.user_types(id)
+  CONSTRAINT compliance_documents_pkey PRIMARY KEY (id),
+  CONSTRAINT compliance_documents_reviewed_by_user_id_fkey FOREIGN KEY (reviewed_by_user_id) REFERENCES auth.users(id)
 );
-CREATE TABLE public.owners (
+CREATE TABLE public.job_evidence (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL UNIQUE,
-  company_name character varying,
-  company_registration_number character varying,
-  billing_address text,
-  payment_terms integer DEFAULT 30 CHECK (payment_terms IS NULL OR payment_terms >= 0),
-  credit_limit numeric DEFAULT 0.00 CHECK (credit_limit >= 0::numeric),
-  total_spent numeric DEFAULT 0.00 CHECK (total_spent >= 0::numeric),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  has_pma boolean NOT NULL DEFAULT false,
-  pma_document_url text,
-  CONSTRAINT owners_pkey PRIMARY KEY (id),
-  CONSTRAINT owners_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  service_request_id uuid NOT NULL,
+  uploaded_by_user_id uuid NOT NULL,
+  file_path text NOT NULL,
+  note text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT job_evidence_pkey PRIMARY KEY (id),
+  CONSTRAINT job_evidence_service_request_id_fkey FOREIGN KEY (service_request_id) REFERENCES public.service_requests(id),
+  CONSTRAINT job_evidence_uploaded_by_user_id_fkey FOREIGN KEY (uploaded_by_user_id) REFERENCES auth.users(id)
 );
-CREATE TABLE public.properties (
+CREATE TABLE public.join_requests (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  initiated_by USER-DEFINED NOT NULL,
+  status USER-DEFINED NOT NULL DEFAULT 'pending'::join_status,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  decided_at timestamp with time zone,
+  CONSTRAINT join_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT join_requests_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id),
+  CONSTRAINT join_requests_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.onboarding_applications (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  subject_type USER-DEFINED NOT NULL,
+  subject_id uuid NOT NULL,
+  applicant_kind USER-DEFINED NOT NULL,
+  status USER-DEFINED NOT NULL DEFAULT 'pending'::approval_status,
+  submitted_at timestamp with time zone NOT NULL DEFAULT now(),
+  decided_at timestamp with time zone,
+  decided_by_user_id uuid,
+  notes text,
+  CONSTRAINT onboarding_applications_pkey PRIMARY KEY (id),
+  CONSTRAINT onboarding_applications_decided_by_user_id_fkey FOREIGN KEY (decided_by_user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.organizations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  org_type USER-DEFINED NOT NULL,
+  name text NOT NULL,
+  owner_user_id uuid NOT NULL,
+  approval_status USER-DEFINED NOT NULL DEFAULT 'pending'::approval_status,
+  approved_by_user_id uuid,
+  approved_at timestamp with time zone,
+  CONSTRAINT organizations_pkey PRIMARY KEY (id),
+  CONSTRAINT organizations_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES auth.users(id),
+  CONSTRAINT organizations_approved_by_user_id_fkey FOREIGN KEY (approved_by_user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.payout_methods (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  owner_type USER-DEFINED NOT NULL,
   owner_id uuid NOT NULL,
-  name character varying NOT NULL,
-  address text NOT NULL,
-  city character varying NOT NULL,
-  state character varying NOT NULL,
-  postal_code character varying,
-  latitude numeric,
-  longitude numeric,
-  property_type character varying NOT NULL CHECK (property_type::text = ANY (ARRAY['residential'::character varying, 'commercial'::character varying, 'industrial'::character varying]::text[])),
-  unit_count integer DEFAULT 1 CHECK (unit_count IS NULL OR unit_count >= 0),
-  contact_name character varying,
-  contact_phone character varying,
-  access_instructions text,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT properties_pkey PRIMARY KEY (id),
-  CONSTRAINT properties_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.owners(id)
+  provider text NOT NULL DEFAULT 'stripe'::text,
+  external_account_id text NOT NULL,
+  is_default boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT payout_methods_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.service_categories (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  name character varying NOT NULL UNIQUE,
-  slug character varying NOT NULL UNIQUE,
-  description text,
-  icon character varying,
-  is_active boolean DEFAULT true,
-  sort_order integer DEFAULT 0,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  service text NOT NULL UNIQUE,
   CONSTRAINT service_categories_pkey PRIMARY KEY (id)
 );
-CREATE TABLE public.service_types (
+CREATE TABLE public.service_request_assignments (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  category_id uuid NOT NULL,
-  name character varying NOT NULL,
-  description text,
-  default_hourly_rate numeric CHECK (default_hourly_rate IS NULL OR default_hourly_rate >= 0::numeric),
-  default_flat_rate numeric CHECK (default_flat_rate IS NULL OR default_flat_rate >= 0::numeric),
-  estimated_duration_minutes integer CHECK (estimated_duration_minutes IS NULL OR estimated_duration_minutes >= 0),
-  is_active boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT service_types_pkey PRIMARY KEY (id),
-  CONSTRAINT service_types_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.service_categories(id)
+  service_request_id uuid NOT NULL,
+  subcontractor_org_id uuid,
+  subcontractor_user_id uuid,
+  technician_user_id uuid,
+  status USER-DEFINED NOT NULL DEFAULT 'offered'::assign_status,
+  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
+  responded_at timestamp with time zone,
+  CONSTRAINT service_request_assignments_pkey PRIMARY KEY (id),
+  CONSTRAINT service_request_assignments_service_request_id_fkey FOREIGN KEY (service_request_id) REFERENCES public.service_requests(id),
+  CONSTRAINT service_request_assignments_subcontractor_org_id_fkey FOREIGN KEY (subcontractor_org_id) REFERENCES public.organizations(id),
+  CONSTRAINT service_request_assignments_subcontractor_user_id_fkey FOREIGN KEY (subcontractor_user_id) REFERENCES auth.users(id),
+  CONSTRAINT service_request_assignments_technician_user_id_fkey FOREIGN KEY (technician_user_id) REFERENCES auth.users(id)
 );
-CREATE TABLE public.subcontractor_locations (
+CREATE TABLE public.service_requests (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  subcontractor_id uuid NOT NULL,
-  address text NOT NULL,
-  city character varying NOT NULL,
-  state character varying NOT NULL,
-  postal_code character varying,
+  requester_user_id uuid NOT NULL,
+  requester_org_id uuid,
+  service_category_id uuid NOT NULL,
+  title text NOT NULL,
+  description text,
+  address text,
+  city text,
+  state text,
+  postal_code text,
   latitude numeric,
   longitude numeric,
-  is_primary boolean DEFAULT false,
-  created_at timestamp with time zone DEFAULT now(),
+  price_cents bigint NOT NULL,
+  currency text NOT NULL DEFAULT 'USD'::text,
+  status USER-DEFINED NOT NULL DEFAULT 'draft'::sr_status,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT subcontractor_locations_pkey PRIMARY KEY (id),
-  CONSTRAINT subcontractor_locations_subcontractor_id_fkey FOREIGN KEY (subcontractor_id) REFERENCES public.subcontractors(id)
+  CONSTRAINT service_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT service_requests_requester_user_id_fkey FOREIGN KEY (requester_user_id) REFERENCES auth.users(id),
+  CONSTRAINT service_requests_requester_org_id_fkey FOREIGN KEY (requester_org_id) REFERENCES public.organizations(id),
+  CONSTRAINT service_requests_service_category_id_fkey FOREIGN KEY (service_category_id) REFERENCES public.service_categories(id)
 );
-CREATE TABLE public.subcontractor_services (
+CREATE TABLE public.user_org_members (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  subcontractor_id uuid NOT NULL,
-  service_category_id uuid NOT NULL,
-  hourly_rate numeric CHECK (hourly_rate IS NULL OR hourly_rate >= 0::numeric),
-  flat_rate numeric CHECK (flat_rate IS NULL OR flat_rate >= 0::numeric),
-  is_active boolean DEFAULT true,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT subcontractor_services_pkey PRIMARY KEY (id),
-  CONSTRAINT subcontractor_services_subcontractor_id_fkey FOREIGN KEY (subcontractor_id) REFERENCES public.subcontractors(id),
-  CONSTRAINT subcontractor_services_category_id_fkey FOREIGN KEY (service_category_id) REFERENCES public.service_categories(id)
-);
-CREATE TABLE public.subcontractors (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL UNIQUE,
-  company_name character varying,
-  business_registration_number character varying,
-  tier character varying DEFAULT 'tier_3'::character varying CHECK (tier::text = ANY (ARRAY['tier_1'::character varying, 'tier_2'::character varying, 'tier_3'::character varying]::text[])),
-  experience_level character varying DEFAULT 'beginner'::character varying CHECK (experience_level::text = ANY (ARRAY['beginner'::character varying, 'intermediate'::character varying, 'expert'::character varying]::text[])),
-  certification_level character varying DEFAULT 'basic'::character varying CHECK (certification_level::text = ANY (ARRAY['basic'::character varying, 'professional'::character varying, 'master'::character varying]::text[])),
-  is_available boolean DEFAULT true,
-  service_radius_km integer DEFAULT 50 CHECK (service_radius_km IS NULL OR service_radius_km >= 0),
-  acceptance_rate numeric DEFAULT 0.00,
-  completion_rate numeric DEFAULT 0.00,
-  average_rating numeric DEFAULT 0.00,
-  total_jobs_completed integer DEFAULT 0 CHECK (total_jobs_completed IS NULL OR total_jobs_completed >= 0),
-  total_earnings numeric DEFAULT 0.00 CHECK (total_earnings >= 0::numeric),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  subcontractor_type text NOT NULL DEFAULT 'individual'::text CHECK (subcontractor_type = ANY (ARRAY['individual'::text, 'company'::text])),
-  tin text,
-  website text,
-  company_size text,
-  primary_service_category_id uuid,
-  CONSTRAINT subcontractors_pkey PRIMARY KEY (id),
-  CONSTRAINT subcontractors_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
-  CONSTRAINT subcontractors_primary_service_category_id_fkey FOREIGN KEY (primary_service_category_id) REFERENCES public.service_categories(id)
-);
-CREATE TABLE public.user_documents (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  org_id uuid NOT NULL,
   user_id uuid NOT NULL,
-  doc_type text NOT NULL CHECK (doc_type = ANY (ARRAY['pma'::text, 'registration'::text, 'certificate'::text, 'id_card'::text, 'other'::text])),
-  url text NOT NULL,
-  title text,
-  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])),
-  uploaded_at timestamp with time zone NOT NULL DEFAULT now(),
+  org_role USER-DEFINED NOT NULL,
+  status text NOT NULL DEFAULT 'active'::text,
+  CONSTRAINT user_org_members_pkey PRIMARY KEY (id),
+  CONSTRAINT user_org_members_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id),
+  CONSTRAINT user_org_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.user_status (
+  user_id uuid NOT NULL,
+  availability USER-DEFINED NOT NULL DEFAULT 'offline'::availability,
+  last_lat numeric,
+  last_lng numeric,
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT user_documents_pkey PRIMARY KEY (id),
-  CONSTRAINT user_documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT user_status_pkey PRIMARY KEY (user_id),
+  CONSTRAINT user_status_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
-CREATE TABLE public.user_profiles (
+CREATE TABLE public.wallet_accounts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL UNIQUE,
-  first_name character varying NOT NULL,
-  last_name character varying NOT NULL,
-  title character varying,
-  date_of_birth date,
-  profile_picture character varying,
-  bio text,
-  address text,
-  city character varying,
-  state character varying,
-  postal_code character varying,
-  country character varying DEFAULT 'USA'::character varying,
-  tax_id character varying,
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT user_profiles_pkey PRIMARY KEY (id),
-  CONSTRAINT user_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  owner_type USER-DEFINED NOT NULL,
+  owner_id uuid NOT NULL,
+  stripe_customer_id text,
+  balance_cents bigint NOT NULL DEFAULT 0,
+  currency text NOT NULL DEFAULT 'USD'::text,
+  CONSTRAINT wallet_accounts_pkey PRIMARY KEY (id)
 );
-CREATE TABLE public.user_types (
-  id smallint NOT NULL,
-  key text NOT NULL UNIQUE,
-  label text NOT NULL,
-  CONSTRAINT user_types_pkey PRIMARY KEY (id)
+CREATE TABLE public.wallet_transactions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  wallet_id uuid NOT NULL,
+  txn_type USER-DEFINED NOT NULL,
+  delta_cents bigint NOT NULL,
+  reason text,
+  ref_type text,
+  ref_id uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT wallet_transactions_pkey PRIMARY KEY (id),
+  CONSTRAINT wallet_transactions_wallet_id_fkey FOREIGN KEY (wallet_id) REFERENCES public.wallet_accounts(id)
 );
