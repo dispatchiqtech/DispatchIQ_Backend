@@ -2,11 +2,12 @@ from supabase import create_client, Client
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, verify_token
 from fastapi import HTTPException, status
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import re
 import requests
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from app.db.supabase_client import supabase_admin
  
 
 supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
@@ -16,32 +17,165 @@ PASSWORD_REGEX = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&]).{8,
 def validate_password_strength(password: str) -> bool:
     return bool(PASSWORD_REGEX.match(password))
 
-def signup_user(email: str, password: str):
-    """Sign up a new user with email verification."""
+def signup_user(email: str, password: str, first_name: str, last_name: str, company_name: str) -> Dict[str, Any]:
+    """Sign up a new user, create their company, and provision an app_users profile."""
     if not validate_password_strength(password):
         raise ValueError(
             "Password must be 8-64 characters long and include uppercase, "
             "lowercase, digit, and special character."
         )
 
+    user_id: str | None = None
+    company_id: str | None = None
+
     try:
-        response = supabase.auth.sign_up({
-            "email": email, 
+        create_payload = {
+            "email": email,
             "password": password,
-            "options": {
-                "email_redirect_to": f"{settings.FRONTEND_URL}/auth/callback"
-            }
-        })
+            "email_confirm": False,
+            "user_metadata": {
+                "first_name": first_name,
+                "firstName": first_name,
+                "last_name": last_name,
+                "lastName": last_name,
+                "company": company_name,
+                "company_name": company_name,
+                "companyName": company_name,
+            },
+        }
+        create_response = supabase_admin.auth.admin.create_user(create_payload)
 
-        if response.user is None:
-            raise Exception(getattr(response, "error", "Unknown signup failure"))
+        user = getattr(create_response, "user", None)
+        if not user:
+            raise Exception("Supabase did not return user record")
 
-        # Supabase sends confirmation/OTP email automatically if enabled in dashboard
+        user_id = user.id
 
-        return response.user
+        company_res = supabase_admin.table("companies").insert({"name": company_name}).execute()
+        company_data = getattr(company_res, "data", []) or []
+        if not company_data:
+            raise Exception("Failed to create company record")
+        company_id = company_data[0]["id"]
+
+        profile_payload = {
+            "company_id": company_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "is_active": True,
+        }
+        profile_res = supabase_admin.table("app_users").update(profile_payload).eq("user_id", user_id).execute()
+        profile_data = getattr(profile_res, "data", []) or []
+        if not profile_data:
+            # Trigger might not have inserted row (fallback)
+            profile_payload["user_id"] = user_id
+            insert_res = supabase_admin.table("app_users").insert(profile_payload).execute()
+            insert_data = getattr(insert_res, "data", []) or []
+            if not insert_data:
+                raise Exception("Failed to create user profile")
+
+        try:
+            supabase_admin.auth.admin.generate_link(
+                {
+                    "type": "signup",
+                    "email": email,
+                    "options": {
+                        "redirect_to": f"{settings.FRONTEND_URL}/auth/callback"
+                    },
+                }
+            )
+        except Exception:
+            pass
+
+        return {
+            "id": user.id,
+            "email": user.email,
+            "confirmed": user.email_confirmed_at is not None,
+            "message": "Signup successful. We sent a 6-digit code to your email to verify your account.",
+            "company_id": company_id,
+        }
 
     except Exception as e:
+        if user_id:
+            try:
+                supabase_admin.auth.admin.delete_user(user_id)
+            except Exception:
+                pass
+        if company_id:
+            try:
+                supabase_admin.table("companies").delete().eq("id", company_id).execute()
+            except Exception:
+                pass
         raise Exception(f"Supabase signup failed: {str(e)}")
+
+
+def _ensure_company_profile(
+    user_id: str,
+    first_name: Optional[str],
+    last_name: Optional[str],
+    company_hint: Optional[str] = None,
+) -> tuple[str, bool]:
+    """Ensure the user has an app_users profile and linked company."""
+    fn = (first_name or "").strip()
+    ln = (last_name or "").strip()
+    if not fn and not ln:
+        fn, ln = "Google", "User"
+    elif not fn:
+        fn = "Google"
+    elif not ln:
+        ln = "User"
+
+    company_hint = (company_hint or "").strip()
+
+    created_profile = False
+    created_company = False
+
+    profile_res = (
+        supabase_admin.table("app_users")
+        .select("user_id, company_id, first_name, last_name")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    profile_data = getattr(profile_res, "data", []) or []
+    if profile_data:
+        profile = profile_data[0]
+    else:
+        insert_payload = {
+            "user_id": user_id,
+            "first_name": fn,
+            "last_name": ln,
+            "is_active": True,
+        }
+        insert_res = supabase_admin.table("app_users").insert(insert_payload).execute()
+        insert_data = getattr(insert_res, "data", []) or []
+        profile = insert_data[0] if insert_data else insert_payload
+        created_profile = True
+
+    update_fields: Dict[str, Any] = {}
+    if not profile.get("first_name") and fn:
+        update_fields["first_name"] = fn
+    if not profile.get("last_name") and ln:
+        update_fields["last_name"] = ln
+    if update_fields:
+        update_res = supabase_admin.table("app_users").update(update_fields).eq("user_id", user_id).execute()
+        update_data = getattr(update_res, "data", []) or []
+        if update_data:
+            profile = update_data[0]
+        else:
+            profile.update(update_fields)
+
+    company_id = profile.get("company_id")
+    if not company_id:
+        fallback_company = company_hint or f"{fn} {ln}".strip() or "DispatchIQ Company"
+        company_res = supabase_admin.table("companies").insert({"name": fallback_company}).execute()
+        company_data = getattr(company_res, "data", []) or []
+        if not company_data:
+            raise Exception("Failed to create company record")
+        company_id = company_data[0]["id"]
+        supabase_admin.table("app_users").update({"company_id": company_id}).eq("user_id", user_id).execute()
+        created_company = True
+
+    return company_id, (created_profile or created_company)
 
 def signin_user(email: str, password: str) -> Dict[str, Any]:
     """Sign in user and return tokens."""
@@ -61,12 +195,22 @@ def signin_user(email: str, password: str) -> Dict[str, Any]:
         access_token = create_access_token(data={"sub": response.user.id, "email": response.user.email})
         refresh_token = create_refresh_token(data={"sub": response.user.id})
 
+        company_id = None
+        try:
+            profile_res = supabase_admin.table("app_users").select("company_id").eq("user_id", response.user.id).limit(1).execute()
+            profile_data = getattr(profile_res, "data", []) or []
+            if profile_data:
+                company_id = profile_data[0].get("company_id")
+        except Exception:
+            company_id = None
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "user_id": response.user.id,
             "email": response.user.email,
-            "email_confirmed": response.user.email_confirmed_at is not None
+            "email_confirmed": response.user.email_confirmed_at is not None,
+            "company_id": company_id,
         }
 
     except HTTPException:
@@ -290,127 +434,85 @@ def reset_password_with_otp(email: str, code: str, new_password: str) -> bool:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to reset password: {str(e)}")
 
 def signin_with_google(google_id_token: str) -> Dict[str, Any]:
-    """Sign in user with Google OAuth and create account if doesn't exist."""
+    """Sign in with Google OAuth, provisioning company/profile on first login."""
     try:
-        # Verify Google ID token
         try:
-            # Verify the token with Google
             idinfo = id_token.verify_oauth2_token(
-                google_id_token, 
-                google_requests.Request()
+                google_id_token,
+                google_requests.Request(),
             )
-            
-            # Verify the issuer
-            if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
-                raise ValueError('Wrong issuer.')
-                
-            google_user_id = idinfo['sub']
-            email = idinfo['email']
-            email_verified = idinfo.get('email_verified', False)
-            
+            if idinfo.get("iss") not in ["accounts.google.com", "https://accounts.google.com"]:
+                raise ValueError("Wrong issuer.")
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid Google token: {str(e)}"
+                detail=f"Invalid Google token: {str(e)}",
             )
-        
-        # Try to sign in with Supabase using Google OAuth
-        try:
-            response = supabase.auth.sign_in_with_id_token({
+
+        response = supabase.auth.sign_in_with_id_token(
+            {
                 "provider": "google",
-                "token": google_id_token
-            })
-            
-            if response.user and response.session:
-                # User exists, sign them in
-                access_token = create_access_token(data={"sub": response.user.id, "email": response.user.email})
-                refresh_token = create_refresh_token(data={"sub": response.user.id})
-                
-                return {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "user_id": response.user.id,
-                    "email": response.user.email,
-                    "email_confirmed": response.user.email_confirmed_at is not None,
-                    "is_new_user": False
-                }
-                
-        except Exception as supabase_error:
-            # If Supabase signin fails, try to create the user
-            try:
-                # Check if user already exists by email
-                existing_users = supabase.auth.admin.list_users()
-                user_exists = any(user.email == email for user in existing_users.users if user.email)
-                
-                if user_exists:
-                    # User exists but Google signin failed, try regular Google OAuth flow
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="User exists but Google authentication failed. Please try again or use email/password signin."
-                    )
-                
-                # Create new user with Google OAuth
-                signup_response = supabase.auth.sign_up({
-                    "email": email,
-                    "password": f"google_oauth_{google_user_id}_{email}",  # Temporary password
-                    "options": {
-                        "data": {
-                            "provider": "google",
-                            "google_id": google_user_id,
-                            "email_verified": email_verified
-                        }
-                    }
-                })
-                
-                if not signup_response.user:
-                    raise Exception("Failed to create user account")
-                
-                # If user was created successfully, try to sign them in again
-                try:
-                    signin_response = supabase.auth.sign_in_with_id_token({
-                        "provider": "google",
-                        "token": google_id_token
-                    })
-                    
-                    if signin_response.user and signin_response.session:
-                        access_token = create_access_token(data={"sub": signin_response.user.id, "email": signin_response.user.email})
-                        refresh_token = create_refresh_token(data={"sub": signin_response.user.id})
-                        
-                        return {
-                            "access_token": access_token,
-                            "refresh_token": refresh_token,
-                            "user_id": signin_response.user.id,
-                            "email": signin_response.user.email,
-                            "email_confirmed": True,  # Google emails are pre-verified
-                            "is_new_user": True
-                        }
-                    
-                except Exception:
-                    # Fallback: return the created user info
-                    access_token = create_access_token(data={"sub": signup_response.user.id, "email": signup_response.user.email})
-                    refresh_token = create_refresh_token(data={"sub": signup_response.user.id})
-                    
-                    return {
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "user_id": signup_response.user.id,
-                        "email": signup_response.user.email,
-                        "email_confirmed": True,  # Google emails are pre-verified
-                        "is_new_user": True
-                    }
-                    
-            except Exception as create_error:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Failed to create or authenticate Google user: {str(create_error)}"
-                )
-    
+                "token": google_id_token,
+            }
+        )
+
+        user = getattr(response, "user", None)
+        session = getattr(response, "session", None)
+        if not user or not session:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google authentication failed.",
+            )
+
+        user_metadata = getattr(user, "user_metadata", {}) or {}
+        first_name = (
+            (idinfo.get("given_name") or "").strip()
+            or (user_metadata.get("first_name") or "").strip()
+            or (user_metadata.get("firstName") or "").strip()
+        )
+        last_name = (
+            (idinfo.get("family_name") or "").strip()
+            or (user_metadata.get("last_name") or "").strip()
+            or (user_metadata.get("lastName") or "").strip()
+        )
+        if not first_name and idinfo.get("name"):
+            parts = idinfo["name"].strip().split(" ", 1)
+            first_name = parts[0]
+            if len(parts) > 1 and not last_name:
+                last_name = parts[1]
+
+        company_hint = (
+            (user_metadata.get("company") or "").strip()
+            or (user_metadata.get("company_name") or "").strip()
+            or (user_metadata.get("companyName") or "").strip()
+            or (idinfo.get("hd") or "").strip()
+        )
+
+        company_id, created_new = _ensure_company_profile(
+            user.id,
+            first_name,
+            last_name,
+            company_hint,
+        )
+
+        email_confirmed = bool(getattr(user, "email_confirmed_at", None)) or bool(idinfo.get("email_verified"))
+
+        access_token = create_access_token(data={"sub": user.id, "email": user.email})
+        refresh_token = create_refresh_token(data={"sub": user.id})
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "user_id": user.id,
+            "email": user.email,
+            "email_confirmed": email_confirmed,
+            "is_new_user": created_new,
+            "company_id": company_id,
+        }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Google authentication failed: {str(e)}"
+            detail=f"Google authentication failed: {str(e)}",
         )
-
-

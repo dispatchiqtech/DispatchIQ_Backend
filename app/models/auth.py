@@ -1,6 +1,24 @@
-from pydantic import BaseModel, EmailStr, constr
+from pydantic import BaseModel, EmailStr, constr, Field, AliasChoices, ConfigDict
+
 
 class SignupRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    first_name: constr(strip_whitespace=True, min_length=1) = Field(
+        ...,
+        validation_alias=AliasChoices("firstName", "first_name"),
+        serialization_alias="firstName",
+    )
+    last_name: constr(strip_whitespace=True, min_length=1) = Field(
+        ...,
+        validation_alias=AliasChoices("lastName", "last_name"),
+        serialization_alias="lastName",
+    )
+    company: constr(strip_whitespace=True, min_length=1) = Field(
+        ...,
+        validation_alias=AliasChoices("company", "companyName"),
+        serialization_alias="company",
+    )
     email: EmailStr
     password: constr(min_length=8, max_length=64)
 
@@ -9,6 +27,7 @@ class SignupResponse(BaseModel):
     email: EmailStr
     confirmed: bool
     message: str
+    company_id: str
 
 class SigninRequest(BaseModel):
     email: EmailStr
@@ -20,6 +39,7 @@ class SigninResponse(BaseModel):
     user_id: str
     email: str
     email_confirmed: bool
+    company_id: str | None = None
 
 class TokenRefreshRequest(BaseModel):
     refresh_token: str
@@ -61,3 +81,4 @@ class GoogleSigninResponse(BaseModel):
     email: str
     email_confirmed: bool
     is_new_user: bool
+    company_id: str

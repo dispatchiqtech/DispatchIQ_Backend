@@ -23,6 +23,7 @@ CREATE TABLE public.companies (
   collect_pte boolean NOT NULL DEFAULT true,
   collect_window boolean NOT NULL DEFAULT true,
   on_call_enabled boolean NOT NULL DEFAULT false,
+  on_call_rotation text NOT NULL DEFAULT 'weekly'::text,
   CONSTRAINT companies_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.emergency_vendors (

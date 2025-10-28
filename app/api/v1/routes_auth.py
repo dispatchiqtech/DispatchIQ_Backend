@@ -21,14 +21,15 @@ router = APIRouter()
 async def signup(request: Request, signup_data: SignupRequest):
     """Register a new user with email verification."""
     try:
-        user = signup_user(signup_data.email, signup_data.password)
+        result = signup_user(
+            signup_data.email,
+            signup_data.password,
+            signup_data.first_name,
+            signup_data.last_name,
+            signup_data.company,
+        )
 
-        return {
-            "id": user.id,
-            "email": user.email,
-            "confirmed": user.email_confirmed_at is not None,
-            "message": "Signup successful. We sent a 6-digit code to your email to verify your account."
-        }
+        return result
 
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
