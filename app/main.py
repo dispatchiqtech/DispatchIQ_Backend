@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.v1 import routes_auth, routes_onboarding
+from app.api.v1 import routes_auth, routes_onboarding, routes_work_orders
 from app.db.supabase_client import supabase
 from app.api.deps import limiter
 from slowapi import _rate_limit_exceeded_handler
@@ -32,3 +32,4 @@ async def health_check():
 
 app.include_router(routes_auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(routes_onboarding.router, prefix="/api/v1/onboarding", tags=["Onboarding"])
+app.include_router(routes_work_orders.router, prefix="/api/v1/work-orders", tags=["Work Orders"])
