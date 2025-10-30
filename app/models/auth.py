@@ -40,6 +40,7 @@ class SigninResponse(BaseModel):
     email: str
     email_confirmed: bool
     company_id: str | None = None
+    is_onboarded: bool
 
 class TokenRefreshRequest(BaseModel):
     refresh_token: str

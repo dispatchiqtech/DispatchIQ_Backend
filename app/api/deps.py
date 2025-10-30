@@ -50,7 +50,11 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
                 detail="Could not validate user"
             )
             
-    except HTTPException:
+    except HTTPException as e:
+        try:
+            print(f"[auth] Custom JWT path failed: {getattr(e, 'detail', str(e))}")
+        except Exception:
+            pass
         # If custom JWT fails, try Supabase token
         try:
             response = supabase.auth.get_user(token)
@@ -61,6 +65,10 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
                 )
             return response.user
         except Exception as e:
+            try:
+                print(f"[auth] Supabase token path failed: {str(e)}")
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials"

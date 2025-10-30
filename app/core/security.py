@@ -52,7 +52,12 @@ def verify_token(token: str, token_type: str = "access") -> dict:
                 detail="Invalid token type"
             )
         return payload
-    except JWTError:
+    except JWTError as e:
+        # Minimal debug to help diagnose local auth issues (prints to server logs)
+        try:
+            print(f"[auth] JWT decode failed: {str(e)} | alg={ALGORITHM} | has_secret={bool(SECRET_KEY)}")
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

@@ -73,18 +73,46 @@ def signup_user(email: str, password: str, first_name: str, last_name: str, comp
             if not insert_data:
                 raise Exception("Failed to create user profile")
 
+        # Send OTP verification email explicitly
+        # When using admin.create_user(), Supabase doesn't automatically send OTP emails
         try:
-            supabase_admin.auth.admin.generate_link(
-                {
-                    "type": "signup",
+            service_key = settings.SUPABASE_SERVICE_KEY or settings.SUPABASE_KEY
+            headers = {
+                "apikey": service_key,
+                "Authorization": f"Bearer {service_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Use the OTP endpoint to send a 6-digit code
+            otp_response = requests.post(
+                f"{settings.SUPABASE_URL}/auth/v1/otp",
+                headers=headers,
+                json={
                     "email": email,
-                    "options": {
-                        "redirect_to": f"{settings.FRONTEND_URL}/auth/callback"
-                    },
+                    "type": "signup",  # Must be "signup" to match verify_otp type
                 }
             )
-        except Exception:
-            pass
+            
+            if otp_response.status_code in [200, 201, 204]:
+                print(f"OTP email sent successfully to {email}")
+            else:
+                # Log error for debugging
+                error_detail = otp_response.text if hasattr(otp_response, 'text') else 'Unknown error'
+                print(f"Failed to send OTP email. Status: {otp_response.status_code}, Response: {error_detail}")
+                
+                # Fallback: try using the regular client's resend method
+                try:
+                    supabase.auth.resend({
+                        "type": "signup",
+                        "email": email,
+                    })
+                    print(f"Fallback: Used client resend for {email}")
+                except Exception as fallback_error:
+                    print(f"Fallback resend also failed: {str(fallback_error)}")
+                    
+        except Exception as e:
+            # Log error but don't fail signup - user can use resend verification endpoint
+            print(f"Exception sending OTP email during signup: {str(e)}")
 
         return {
             "id": user.id,
@@ -204,6 +232,25 @@ def signin_user(email: str, password: str) -> Dict[str, Any]:
         except Exception:
             company_id = None
 
+        # Determine onboarding status: if the company has any setup records, consider onboarded
+        is_onboarded = False
+        try:
+            if company_id:
+                for table in ("properties", "technicians", "emergency_vendors"):
+                    res = (
+                        supabase_admin.table(table)
+                        .select("id")
+                        .eq("company_id", company_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    data = getattr(res, "data", []) or []
+                    if data:
+                        is_onboarded = True
+                        break
+        except Exception:
+            is_onboarded = False
+
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -211,6 +258,7 @@ def signin_user(email: str, password: str) -> Dict[str, Any]:
             "email": response.user.email,
             "email_confirmed": response.user.email_confirmed_at is not None,
             "company_id": company_id,
+            "is_onboarded": is_onboarded,
         }
 
     except HTTPException:
