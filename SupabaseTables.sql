@@ -44,6 +44,17 @@ CREATE TABLE public.properties (
   CONSTRAINT properties_pkey PRIMARY KEY (id),
   CONSTRAINT properties_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id)
 );
+CREATE TABLE public.property_units (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  property_id uuid NOT NULL,
+  label text NOT NULL,
+  notes text,
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT property_units_pkey PRIMARY KEY (id),
+  CONSTRAINT property_units_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
+  CONSTRAINT property_units_property_id_fkey FOREIGN KEY (property_id) REFERENCES public.properties(id)
+);
 CREATE TABLE public.technicians (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL,
@@ -76,7 +87,9 @@ CREATE TABLE public.work_orders (
   assigned_technician_id uuid,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   completed_at timestamp with time zone,
+  unit_id uuid,
   CONSTRAINT work_orders_pkey PRIMARY KEY (id),
+  CONSTRAINT work_orders_unit_id_fkey FOREIGN KEY (unit_id) REFERENCES public.property_units(id),
   CONSTRAINT work_orders_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id),
   CONSTRAINT work_orders_property_id_fkey FOREIGN KEY (property_id) REFERENCES public.properties(id),
   CONSTRAINT work_orders_assigned_technician_id_fkey FOREIGN KEY (assigned_technician_id) REFERENCES public.technicians(id)
