@@ -83,3 +83,10 @@ class GoogleSigninResponse(BaseModel):
     email_confirmed: bool
     is_new_user: bool
     company_id: str
+
+class CurrentUserResponse(BaseModel):
+    id: str
+    email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    company_id: str | None = None

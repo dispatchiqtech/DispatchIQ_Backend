@@ -90,3 +90,19 @@ class WorkOrderResponse(BaseModel):
     tenant_phone: Optional[str] = None
     assigned_technician_id: Optional[str] = None
     created_at: datetime
+
+
+class WorkOrderListResponse(BaseModel):
+    work_orders: List[WorkOrderResponse]
+    total: int
+
+
+class WorkOrderUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
+    assigned_technician_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("assigned_technician_id", "assignedTechnicianId"),
+        serialization_alias="assignedTechnicianId",
+    )
+    status: Optional[str] = None

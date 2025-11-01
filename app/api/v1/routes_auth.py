@@ -1,17 +1,19 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from app.models.auth import (
     SignupRequest, SignupResponse, SigninRequest, SigninResponse,
     TokenRefreshRequest, TokenRefreshResponse, ResendVerificationRequest,
     GoogleSigninRequest, GoogleSigninResponse, VerifyOtpRequest, VerifyOtpResponse,
-    ForgotPasswordRequest, ResetPasswordOtpRequest, ResetPasswordResponse
+    ForgotPasswordRequest, ResetPasswordOtpRequest, ResetPasswordResponse,
+    CurrentUserResponse
 )
 from app.services.auth_service import (
     signup_user, signin_user, refresh_access_token,
     signin_with_google, send_verification_otp, verify_email_with_otp,
     request_password_reset, reset_password_with_otp
 )
-from app.api.deps import limiter
+from app.api.deps import limiter, get_current_active_user
 from app.core.config import settings
+from app.db.supabase_client import supabase_admin
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
@@ -173,3 +175,31 @@ async def google_signin(request: Request, google_data: GoogleSigninRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Google signin failed: {str(e)}")
+
+@router.get("/me", response_model=CurrentUserResponse)
+async def get_current_user_info(current_user = Depends(get_current_active_user)):
+    """
+    Get the current authenticated user's information.
+    Returns user ID, email, name, and company ID from the app_users table.
+    """
+    try:
+        # Get user profile from app_users table
+        profile_res = supabase_admin.table("app_users").select(
+            "first_name, last_name, company_id"
+        ).eq("user_id", current_user.id).limit(1).execute()
+        
+        profile_data = getattr(profile_res, "data", []) or []
+        profile = profile_data[0] if profile_data else {}
+        
+        return CurrentUserResponse(
+            id=current_user.id,
+            email=current_user.email or "",
+            first_name=profile.get("first_name"),
+            last_name=profile.get("last_name"),
+            company_id=profile.get("company_id"),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve user information: {str(e)}"
+        )

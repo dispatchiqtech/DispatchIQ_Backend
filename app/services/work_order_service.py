@@ -12,6 +12,8 @@ from app.models.work_orders import (
     WorkOrderCreate,
     WorkOrderOptionsResponse,
     WorkOrderResponse,
+    WorkOrderListResponse,
+    WorkOrderUpdate,
 )
 
 
@@ -255,6 +257,200 @@ def create_work_order(user_id: str, request: WorkOrderCreate) -> WorkOrderRespon
         issue=record.get("issue", ""),
         priority=record.get("priority", ""),
         status=record.get("status", ""),
+        pte=record.get("pte"),
+        preferred_window=record.get("preferred_window"),
+        tenant_name=record.get("tenant_name"),
+        tenant_phone=record.get("tenant_phone"),
+        assigned_technician_id=record.get("assigned_technician_id"),
+        created_at=record.get("created_at"),
+    )
+
+
+def get_work_orders(
+    user_id: str,
+    status_filter: Optional[str] = None,
+    priority_filter: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> WorkOrderListResponse:
+    app_user = _get_app_user(user_id)
+    if not app_user or not app_user.get("company_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not associated with a company.",
+        )
+
+    company_id = app_user["company_id"]
+
+    # Build query
+    query = (
+        supabase.table("work_orders")
+        .select("id,company_id,property_id,unit_id,unit,issue,priority,status,pte,preferred_window,tenant_name,tenant_phone,assigned_technician_id,created_at")
+        .eq("company_id", company_id)
+    )
+
+    if status_filter:
+        query = query.eq("status", status_filter)
+    if priority_filter:
+        query = query.eq("priority", priority_filter)
+
+    # Get total count - use a simpler approach
+    count_query = supabase.table("work_orders").select("id").eq("company_id", company_id)
+    if status_filter:
+        count_query = count_query.eq("status", status_filter)
+    if priority_filter:
+        count_query = count_query.eq("priority", priority_filter)
+    
+    count_res = count_query.execute()
+    total = len(getattr(count_res, "data", []) or [])
+
+    # Get work orders with pagination
+    query = query.order("created_at", desc=True).limit(limit).offset(offset)
+    res = query.execute()
+    data = getattr(res, "data", []) or []
+
+    # Get property names
+    property_ids = [row["property_id"] for row in data if row.get("property_id")]
+    property_names = {}
+    if property_ids:
+        prop_res = (
+            supabase.table("properties")
+            .select("id,name")
+            .in_("id", property_ids)
+            .execute()
+        )
+        prop_data = getattr(prop_res, "data", []) or []
+        property_names = {row["id"]: row["name"] for row in prop_data}
+
+    # Build response
+    work_orders = []
+    for row in data:
+        wo = WorkOrderResponse(
+            id=row["id"],
+            company_id=row["company_id"],
+            property_id=row["property_id"],
+            property_name=property_names.get(row["property_id"]),
+            unit_id=row.get("unit_id"),
+            unit_label=row.get("unit"),
+            issue=row.get("issue", ""),
+            priority=row.get("priority", "routine"),
+            status=row.get("status", "open"),
+            pte=row.get("pte"),
+            preferred_window=row.get("preferred_window"),
+            tenant_name=row.get("tenant_name"),
+            tenant_phone=row.get("tenant_phone"),
+            assigned_technician_id=row.get("assigned_technician_id"),
+            created_at=row.get("created_at"),
+        )
+        work_orders.append(wo)
+
+    return WorkOrderListResponse(work_orders=work_orders, total=total)
+
+
+def update_work_order(user_id: str, work_order_id: str, update_data: WorkOrderUpdate) -> WorkOrderResponse:
+    app_user = _get_app_user(user_id)
+    if not app_user or not app_user.get("company_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not associated with a company.",
+        )
+
+    company_id = app_user["company_id"]
+
+    # Verify work order belongs to company
+    check_res = (
+        supabase.table("work_orders")
+        .select("id,property_id")
+        .eq("id", work_order_id)
+        .eq("company_id", company_id)
+        .limit(1)
+        .execute()
+    )
+    check_data = getattr(check_res, "data", []) or []
+    if not check_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Work order not found",
+        )
+
+    # Build update dict
+    update_dict = {}
+    
+    # Handle technician assignment
+    if update_data.assigned_technician_id is not None:
+        if update_data.assigned_technician_id:
+            normalized_tech_id = _normalize_uuid(update_data.assigned_technician_id, "assigned_technician_id")
+            tech_res = (
+                supabase.table("technicians")
+                .select("id")
+                .eq("id", normalized_tech_id)
+                .eq("company_id", company_id)
+                .limit(1)
+                .execute()
+            )
+            tech_data = getattr(tech_res, "data", []) or []
+            if not tech_data:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Technician does not belong to this company.",
+                )
+            update_dict["assigned_technician_id"] = tech_data[0]["id"]
+        else:
+            update_dict["assigned_technician_id"] = None
+    
+    # Handle status update
+    if update_data.status is not None:
+        update_dict["status"] = update_data.status
+
+    if not update_dict:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update",
+        )
+
+    # Update work order
+    res = (
+        supabase.table("work_orders")
+        .update(update_dict)
+        .eq("id", work_order_id)
+        .eq("company_id", company_id)
+        .execute()
+    )
+    
+    data = getattr(res, "data", []) or []
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update work order",
+        )
+    
+    record = data[0]
+    
+    # Get property name
+    property_id = record.get("property_id") or check_data[0].get("property_id")
+    property_name = None
+    if property_id:
+        prop_res = (
+            supabase.table("properties")
+            .select("name")
+            .eq("id", property_id)
+            .limit(1)
+            .execute()
+        )
+        prop_data = getattr(prop_res, "data", []) or []
+        if prop_data:
+            property_name = prop_data[0]["name"]
+
+    return WorkOrderResponse(
+        id=record["id"],
+        company_id=company_id,
+        property_id=record["property_id"],
+        property_name=property_name,
+        unit_id=record.get("unit_id"),
+        unit_label=record.get("unit"),
+        issue=record.get("issue", ""),
+        priority=record.get("priority", "routine"),
+        status=record.get("status", "open"),
         pte=record.get("pte"),
         preferred_window=record.get("preferred_window"),
         tenant_name=record.get("tenant_name"),
